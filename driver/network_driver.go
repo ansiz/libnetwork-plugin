@@ -6,24 +6,22 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
-	"strconv"
-
-	"github.com/pkg/errors"
-	libcalicoErrors "github.com/projectcalico/libcalico-go/lib/errors"
-	log "github.com/sirupsen/logrus"
 
 	dockerClient "github.com/docker/docker/client"
 	"github.com/docker/go-plugins-helpers/network"
+	"github.com/pkg/errors"
 	"github.com/projectcalico/libcalico-go/lib/api"
 	datastoreClient "github.com/projectcalico/libcalico-go/lib/client"
+	libcalicoErrors "github.com/projectcalico/libcalico-go/lib/errors"
 	caliconet "github.com/projectcalico/libcalico-go/lib/net"
-
 	logutils "github.com/projectcalico/libnetwork-plugin/utils/log"
 	mathutils "github.com/projectcalico/libnetwork-plugin/utils/math"
 	"github.com/projectcalico/libnetwork-plugin/utils/netns"
 	osutils "github.com/projectcalico/libnetwork-plugin/utils/os"
+	log "github.com/sirupsen/logrus"
 )
 
 const DOCKER_LABEL_PREFIX = "org.projectcalico.label."
@@ -247,7 +245,6 @@ func (d NetworkDriver) CreateEndpoint(request *network.CreateEndpointRequest) (*
 
 		addresses = append(addresses, caliconet.IPNet{IPNet: net.IPNet{IP: ip4, Mask: net.CIDRMask(32, 32)}})
 	}
-
 	if request.Interface.AddressIPv6 != "" {
 		// Parse the address this function was passed.
 		ip6, ipnet, err := net.ParseCIDR(request.Interface.AddressIPv6)
@@ -280,36 +277,21 @@ func (d NetworkDriver) CreateEndpoint(request *network.CreateEndpointRequest) (*
 	endpoint.Spec.MAC = &caliconet.MAC{HardwareAddr: mac}
 	endpoint.Spec.IPNetworks = append(endpoint.Spec.IPNetworks, addresses...)
 
-	// Use the Docker API to fetch the network name (so we don't have to use an ID everywhere)
-	dockerCli, err := dockerClient.NewEnvClient()
-	if err != nil {
-		err = errors.Wrap(err, "Error while attempting to instantiate docker client from env")
-		log.Errorln(err)
-		return nil, err
-	}
-	defer dockerCli.Close()
-	networkData, err := dockerCli.NetworkInspect(context.Background(), request.NetworkID)
-	if err != nil {
-		err = errors.Wrapf(err, "Network %v inspection error", request.NetworkID)
-		log.Errorln(err)
-		return nil, err
-	}
-
 	if d.createProfiles {
 		// Now that we know the network name, set it on the endpoint.
-		endpoint.Spec.Profiles = append(endpoint.Spec.Profiles, networkData.Name)
+		endpoint.Spec.Profiles = append(endpoint.Spec.Profiles, request.NetworkID)
 
 		// If a profile for the network name doesn't exist then it needs to be created.
 		// We always attempt to create the profile and rely on the datastore to reject
 		// the request if the profile already exists.
 		profile := &api.Profile{
 			Metadata: api.ProfileMetadata{
-				Name: networkData.Name,
-				Tags: []string{networkData.Name},
+				Name: request.NetworkID,
+				Tags: []string{request.NetworkID},
 			},
 			Spec: api.ProfileSpec{
 				EgressRules:  []api.Rule{{Action: "allow"}},
-				IngressRules: []api.Rule{{Action: "allow", Source: api.EntityRule{Tag: networkData.Name}}},
+				IngressRules: []api.Rule{{Action: "allow", Source: api.EntityRule{Tag: request.NetworkID}}},
 			},
 		}
 		if _, err := d.client.Profiles().Create(profile); err != nil {
